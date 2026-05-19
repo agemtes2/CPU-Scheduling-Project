@@ -2,162 +2,216 @@ import java.util.*;
 
 class Process {
     String pid;
-    int arrivalTime;
-    int burstTime;
-    int priority;
+    int arrivalTime, burstTime, priority;
+    int ioStartTime, ioDuration;
 
+    int remainingBurst;
+    int cpuUsed;
     int waitingTime;
     int turnaroundTime;
+    int completionTime;
 
-    public Process(String pid, int arrivalTime, int burstTime, int priority) {
+    boolean ioDone = false;
+
+    Process(String pid, int arrivalTime, int burstTime, int priority, int ioStartTime, int ioDuration) {
         this.pid = pid;
         this.arrivalTime = arrivalTime;
         this.burstTime = burstTime;
         this.priority = priority;
+        this.ioStartTime = ioStartTime;
+        this.ioDuration = ioDuration;
+        this.remainingBurst = burstTime;
+    }
+
+    Process copy() {
+        return new Process(pid, arrivalTime, burstTime, priority, ioStartTime, ioDuration);
     }
 }
 
-class FCFS {
-    public static void run(ArrayList<Process> processes) {
-        int currentTime = 0;
+class Scheduler {
 
-        System.out.println("\n================ FCFS Scheduling ================");
-        System.out.println("Execution Order:");
-
-        for (Process p : processes) {
-            System.out.print(p.pid + " -> ");
-
-            if (currentTime < p.arrivalTime) {
-                currentTime = p.arrivalTime;
-            }
-
-            p.waitingTime = currentTime - p.arrivalTime;
-            currentTime += p.burstTime;
-            p.turnaroundTime = p.waitingTime + p.burstTime;
-        }
-
-        System.out.println();
-
-        System.out.printf("%-5s %-15s %-15s%n",
-                "PID", "Waiting Time", "Turnaround Time");
-
-        for (Process p : processes) {
-            System.out.printf("%-5s %-15d %-15d%n",
-                    p.pid, p.waitingTime, p.turnaroundTime);
-        }
+    static void runFCFS(ArrayList<Process> original) {
+        runSimulation(original, "FCFS", 0);
     }
-}
 
-class RoundRobin {
-    public static void run(ArrayList<Process> processes, int quantum) {
-        Queue<Process> queue = new LinkedList<>();
-        int[] remainingBurst = new int[processes.size()];
+    static void runRoundRobin(ArrayList<Process> original, int quantum) {
+        runSimulation(original, "Round Robin", quantum);
+    }
 
-        for (int i = 0; i < processes.size(); i++) {
-            remainingBurst[i] = processes.get(i).burstTime;
-            queue.add(processes.get(i));
-        }
+    static void runPriority(ArrayList<Process> original) {
+        runSimulation(original, "Priority", 0);
+    }
 
+    static void runSimulation(ArrayList<Process> original, String type, int quantum) {
+        ArrayList<Process> processes = new ArrayList<>();
+        for (Process p : original) processes.add(p.copy());
+
+        processes.sort(Comparator.comparingInt(p -> p.arrivalTime));
+
+        Queue<Process> readyQueue = new LinkedList<>();
+        Queue<Process> ioQueue = new LinkedList<>();
+
+        Process running = null;
+        Process ioProcess = null;
+
+        int ioFinishTime = -1;
         int time = 0;
+        int completed = 0;
+        int index = 0;
+        int quantumUsed = 0;
 
-        System.out.println("\n================ Round Robin Scheduling ================");
-        System.out.println("Time Quantum = " + quantum);
-        System.out.println("Execution Order:");
+        ArrayList<String> ganttNames = new ArrayList<>();
+        ArrayList<Integer> ganttTimes = new ArrayList<>();
+        ganttTimes.add(0);
 
-        while (!queue.isEmpty()) {
-            Process p = queue.poll();
-            int index = Integer.parseInt(p.pid.substring(1)) - 1;
+        System.out.println("\n================ " + type + " Scheduling ================");
 
-            System.out.print(p.pid + " -> ");
+        while (completed < processes.size()) {
 
-            if (remainingBurst[index] > quantum) {
-                time += quantum;
-                remainingBurst[index] -= quantum;
-                queue.add(p);
-            } else {
-                time += remainingBurst[index];
+            while (index < processes.size() && processes.get(index).arrivalTime <= time) {
+                readyQueue.add(processes.get(index));
+                index++;
+            }
 
-                p.turnaroundTime = time - p.arrivalTime;
-                p.waitingTime = p.turnaroundTime - p.burstTime;
+            if (ioProcess != null && time == ioFinishTime) {
+                ioProcess.ioDone = true;
+                readyQueue.add(ioProcess);
+                ioProcess = null;
 
-                remainingBurst[index] = 0;
+                if (!ioQueue.isEmpty()) {
+                    ioProcess = ioQueue.poll();
+                    ioFinishTime = time + ioProcess.ioDuration;
+                }
+            }
+
+            if (running == null && !readyQueue.isEmpty()) {
+                if (type.equals("Priority")) {
+                    Process highest = null;
+                    for (Process p : readyQueue) {
+                        if (highest == null || p.priority < highest.priority) {
+                            highest = p;
+                        }
+                    }
+                    readyQueue.remove(highest);
+                    running = highest;
+                } else {
+                    running = readyQueue.poll();
+                }
+                quantumUsed = 0;
+            }
+
+            for (Process p : readyQueue) {
+                p.waitingTime++;
+            }
+
+            if (running == null) {
+                addGantt(ganttNames, ganttTimes, "WASTE", time + 1);
+                time++;
+                continue;
+            }
+
+            addGantt(ganttNames, ganttTimes, running.pid, time + 1);
+
+            running.cpuUsed++;
+            running.remainingBurst--;
+            quantumUsed++;
+            time++;
+
+            if (!running.ioDone && running.cpuUsed == running.ioStartTime && running.remainingBurst > 0) {
+                if (ioProcess == null) {
+                    ioProcess = running;
+                    ioFinishTime = time + running.ioDuration;
+                } else {
+                    ioQueue.add(running);
+                }
+                running = null;
+            }
+            else if (running.remainingBurst == 0) {
+                running.completionTime = time;
+                running.turnaroundTime = running.completionTime - running.arrivalTime;
+                completed++;
+                running = null;
+            }
+            else if (type.equals("Round Robin") && quantumUsed == quantum) {
+                readyQueue.add(running);
+                running = null;
             }
         }
 
-        System.out.println();
+        printGantt(ganttNames, ganttTimes);
+        printTable(processes);
+    }
 
-        System.out.printf("%-5s %-15s %-15s%n",
-                "PID", "Waiting Time", "Turnaround Time");
-
-        for (Process p : processes) {
-            System.out.printf("%-5s %-15d %-15d%n",
-                    p.pid, p.waitingTime, p.turnaroundTime);
+    static void addGantt(ArrayList<String> names, ArrayList<Integer> times, String name, int endTime) {
+        if (names.size() > 0 && names.get(names.size() - 1).equals(name)) {
+            times.set(times.size() - 1, endTime);
+        } else {
+            names.add(name);
+            times.add(endTime);
         }
     }
-}
 
-class PriorityScheduling {
-    public static void run(ArrayList<Process> processes) {
-        processes.sort(Comparator.comparingInt(p -> p.priority));
+    static void printGantt(ArrayList<String> names, ArrayList<Integer> times) {
+        System.out.println("\nGantt Chart:");
 
-        int currentTime = 0;
-
-        System.out.println("\n================ Priority Scheduling ================");
-        System.out.println("Smaller priority number = higher priority");
-        System.out.println("Execution Order:");
-
-        for (Process p : processes) {
-            System.out.print(p.pid + " -> ");
-
-            if (currentTime < p.arrivalTime) {
-                currentTime = p.arrivalTime;
-            }
-
-            p.waitingTime = currentTime - p.arrivalTime;
-            currentTime += p.burstTime;
-            p.turnaroundTime = p.waitingTime + p.burstTime;
+        for (String name : names) {
+            System.out.print("| " + name + " ");
         }
+        System.out.println("|");
 
+        for (int t : times) {
+            System.out.print(t + "\t");
+        }
         System.out.println();
+    }
 
-        System.out.printf("%-5s %-10s %-15s %-15s%n",
-                "PID", "Priority", "Waiting Time", "Turnaround Time");
+    static void printTable(ArrayList<Process> processes) {
+        System.out.println("\nPID\tArrival\tBurst\tPriority\tI/O\tWaiting\tTurnaround");
 
         for (Process p : processes) {
-            System.out.printf("%-5s %-10d %-15d %-15d%n",
-                    p.pid, p.priority, p.waitingTime, p.turnaroundTime);
+            System.out.println(
+                p.pid + "\t" +
+                p.arrivalTime + "\t" +
+                p.burstTime + "\t" +
+                p.priority + "\t\t" +
+                "[" + p.ioStartTime + "," + p.ioDuration + "]\t" +
+                p.waitingTime + "\t" +
+                p.turnaroundTime
+            );
         }
     }
 }
 
 public class Main {
     public static void main(String[] args) {
+
         ArrayList<Process> processes = new ArrayList<>();
 
-        // PID, Arrival Time, Burst Time, Priority
-        processes.add(new Process("P1", 0, 10, 3));
-        processes.add(new Process("P2", 1, 5, 1));
-        processes.add(new Process("P3", 2, 8, 4));
-        processes.add(new Process("P4", 3, 6, 2));
-        processes.add(new Process("P5", 4, 7, 5));
-        processes.add(new Process("P6", 5, 4, 2));
-        processes.add(new Process("P7", 6, 9, 1));
-        processes.add(new Process("P8", 7, 5, 3));
-        processes.add(new Process("P9", 8, 6, 4));
-        processes.add(new Process("P10", 9, 8, 2));
-        processes.add(new Process("P11", 10, 3, 5));
-        processes.add(new Process("P12", 11, 7, 1));
-        processes.add(new Process("P13", 12, 5, 3));
-        processes.add(new Process("P14", 13, 9, 2));
-        processes.add(new Process("P15", 14, 4, 4));
-        processes.add(new Process("P16", 15, 6, 1));
-        processes.add(new Process("P17", 16, 8, 5));
-        processes.add(new Process("P18", 17, 5, 3));
-        processes.add(new Process("P19", 18, 7, 2));
-        processes.add(new Process("P20", 19, 6, 4));
+        // PID, Arrival Time, Burst Time, Priority, I/O Start, I/O Duration
+        processes.add(new Process("P1", 0, 10, 3, 2, 3));
+        processes.add(new Process("P2", 1, 5, 1, 1, 2));
+        processes.add(new Process("P3", 2, 8, 4, 3, 1));
+        processes.add(new Process("P4", 3, 6, 2, 2, 2));
+        processes.add(new Process("P5", 4, 7, 5, 3, 2));
+        processes.add(new Process("P6", 5, 4, 2, 1, 1));
+        processes.add(new Process("P7", 6, 9, 1, 4, 3));
+        processes.add(new Process("P8", 7, 5, 3, 2, 2));
+        processes.add(new Process("P9", 8, 6, 4, 3, 1));
+        processes.add(new Process("P10", 9, 8, 2, 4, 2));
 
-        FCFS.run(new ArrayList<>(processes));
-        RoundRobin.run(new ArrayList<>(processes), 3);
-        PriorityScheduling.run(new ArrayList<>(processes));
+        processes.add(new Process("P11", 10, 3, 5, 1, 1));
+        processes.add(new Process("P12", 11, 7, 1, 3, 2));
+        processes.add(new Process("P13", 12, 5, 3, 2, 1));
+        processes.add(new Process("P14", 13, 9, 2, 4, 3));
+        processes.add(new Process("P15", 14, 4, 4, 1, 2));
+        processes.add(new Process("P16", 15, 6, 1, 3, 1));
+        processes.add(new Process("P17", 16, 8, 5, 4, 2));
+        processes.add(new Process("P18", 17, 5, 3, 2, 2));
+        processes.add(new Process("P19", 18, 7, 2, 3, 1));
+        processes.add(new Process("P20", 19, 6, 4, 2, 3));
+
+        Scheduler.runFCFS(processes);
+        Scheduler.runRoundRobin(processes, 3);
+        Scheduler.runPriority(processes);
     }
 }
